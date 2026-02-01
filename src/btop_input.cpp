@@ -487,6 +487,12 @@ namespace Input {
 						no_update = false;
 					}
 				}
+				else if (is_in(key, "{", "}", "[", "]", "<", ">") and Config::getB("proc_tree")) {
+					atomic_wait(Runner::active);
+					if (is_in(key, "{", "[", "<")) Proc::collapse_all = true;
+					if (is_in(key, "}", "]", ">")) Proc::expand_all = true;
+					no_update = false;
+				}
 				else if (is_in(key, "t", kill_key) and (Config::getB("show_detailed") or Config::getI("selected_pid") > 0)) {
 					atomic_wait(Runner::active);
 					if (Config::getB("show_detailed") and Config::getI("proc_selected") == 0 and Proc::detailed.status == "Dead") return;
@@ -505,6 +511,11 @@ namespace Input {
 				    Menu::show(Menu::Menus::Renice);
 				    return;
 			    }
+				else if (is_in(key, "v", "V")) {
+					atomic_wait(Runner::active);
+					Proc::open_in_editor = true;
+					return;
+				}
 				else if (is_in(key, "up", "down", "page_up", "page_down", "home", "end") or (vim_keys and is_in(key, "j", "k", "g", "G"))) {
 					proc_mouse_scroll:
 					redraw = false;

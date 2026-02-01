@@ -1003,11 +1003,13 @@ namespace Proc {
 	string current_filter;
 	bool current_rev = false;
 	bool is_tree_mode;
+	atomic<bool> open_in_editor{false};
 
 	fs::file_time_type passwd_time;
 
 	uint64_t cputimes;
 	int collapse = -1, expand = -1, toggle_children = -1;
+	bool collapse_all = false, expand_all = false;
 	uint64_t old_cputimes = 0;
 	atomic<int> numpids = 0;
 	int filter_found = 0;
@@ -1268,6 +1270,14 @@ namespace Proc {
 		//* Generate tree view if enabled
 		if (tree and (not no_update or should_filter or sorted_change)) {
 			bool locate_selection = false;
+
+			if (collapse_all or expand_all) {
+				for (auto& p : current_procs) {
+					p.collapsed = collapse_all;
+				}
+				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
+				collapse_all = expand_all = false;
+			}
 
 			if (toggle_children != -1) {
 				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);

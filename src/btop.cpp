@@ -35,6 +35,9 @@ tab-size = 4
 #include <numeric>
 #include <ranges>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <cstdlib>
+#include <fstream>
 #include <cmath>
 #include <iostream>
 #include <exception>
@@ -269,6 +272,59 @@ static void _sleep() {
 static void _resume() {
 	Term::init();
 	term_resize(true);
+}
+
+//* Opens the process list in an external editor
+static void open_proclist_in_editor() {
+	// Collect and export the process list
+	auto& plist = Proc::collect(false);
+	string content = Proc::export_list(plist);
+
+	// Create a temporary file
+	char tmpfile[] = "/tmp/btop_proclist_XXXXXX";
+	int fd = mkstemp(tmpfile);
+	if (fd == -1) {
+		Logger::error("Failed to create temporary file for editor");
+		return;
+	}
+	if (write(fd, content.c_str(), content.size()) == -1) {
+		Logger::error("Failed to write to temporary file");
+		close(fd);
+		unlink(tmpfile);
+		return;
+	}
+	close(fd);
+
+	// Get editor from environment
+	const char* editor = std::getenv("EDITOR");
+	if (editor == nullptr or string(editor).empty()) {
+		editor = "nvim";
+	}
+
+	// Suspend btop
+	Runner::stop();
+	Term::restore();
+
+	// Fork and exec editor
+	pid_t pid = fork();
+	if (pid == 0) {
+		// Child process
+		execlp(editor, editor, tmpfile, nullptr);
+		_exit(1);  // If execlp fails
+	} else if (pid > 0) {
+		// Parent process - wait for editor to finish
+		int status;
+		waitpid(pid, &status, 0);
+	} else {
+		Logger::error("Failed to fork for editor");
+	}
+
+	// Resume btop
+	Term::init();
+	term_resize(true);
+
+	// Cleanup
+	unlink(tmpfile);
 }
 
 static void _exit_handler() {
@@ -1156,6 +1212,12 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 				Theme::setTheme();
 				Draw::banner_gen(0, 0, false, true);
 				Global::resized = true;
+			}
+
+			//? Open process list in external editor
+			if (Proc::open_in_editor) {
+				Proc::open_in_editor = false;
+				open_proclist_in_editor();
 			}
 
 			//? Make sure terminal size hasn't changed (in case of SIGWINCH not working properly)

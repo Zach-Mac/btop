@@ -345,6 +345,7 @@ namespace Net {
 
 namespace Proc {
 	extern atomic<int> numpids;
+	extern atomic<bool> open_in_editor;
 
 	extern string box;
 	extern int x, y, width, height, min_width, min_height;
@@ -352,6 +353,7 @@ namespace Proc {
 	extern int select_max;
 	extern atomic<int> detailed_pid;
 	extern int selected_pid, start, selected, collapse, expand, filter_found, selected_depth, toggle_children;
+	extern bool collapse_all, expand_all;
 	extern int scroll_pos;
 	extern string selected_name;
 	extern atomic<bool> resized;
@@ -455,6 +457,9 @@ namespace Proc {
 
 	//* Build prefixes for tree view
 	void _collect_prefixes(tree_proc& t, bool is_last, const string &header = "");
+
+	//* Export process list as formatted text for external viewing
+	string export_list(const vector<proc_info>& plist);
 }
 
 /// Detect container engine.

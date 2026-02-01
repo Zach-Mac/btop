@@ -1,0 +1,394 @@
+diff --git a/src/btop.cpp b/src/btop.cpp
+index 5d44ae9..acff6f5 100644
+--- a/src/btop.cpp
++++ b/src/btop.cpp
+@@ -35,6 +35,9 @@ tab-size = 4
+ #include <numeric>
+ #include <ranges>
+ #include <unistd.h>
++#include <sys/wait.h>
++#include <cstdlib>
++#include <fstream>
+ #include <cmath>
+ #include <iostream>
+ #include <exception>
+@@ -271,6 +274,59 @@ static void _resume() {
+ 	term_resize(true);
+ }
+ 
++//* Opens the process list in an external editor
++static void open_proclist_in_editor() {
++	// Collect and export the process list
++	auto& plist = Proc::collect(false);
++	string content = Proc::export_list(plist);
++
++	// Create a temporary file
++	char tmpfile[] = "/tmp/btop_proclist_XXXXXX";
++	int fd = mkstemp(tmpfile);
++	if (fd == -1) {
++		Logger::error("Failed to create temporary file for editor");
++		return;
++	}
++	if (write(fd, content.c_str(), content.size()) == -1) {
++		Logger::error("Failed to write to temporary file");
++		close(fd);
++		unlink(tmpfile);
++		return;
++	}
++	close(fd);
++
++	// Get editor from environment
++	const char* editor = std::getenv("EDITOR");
++	if (editor == nullptr or string(editor).empty()) {
++		editor = "nvim";
++	}
++
++	// Suspend btop
++	Runner::stop();
++	Term::restore();
++
++	// Fork and exec editor
++	pid_t pid = fork();
++	if (pid == 0) {
++		// Child process
++		execlp(editor, editor, tmpfile, nullptr);
++		_exit(1);  // If execlp fails
++	} else if (pid > 0) {
++		// Parent process - wait for editor to finish
++		int status;
++		waitpid(pid, &status, 0);
++	} else {
++		Logger::error("Failed to fork for editor");
++	}
++
++	// Resume btop
++	Term::init();
++	term_resize(true);
++
++	// Cleanup
++	unlink(tmpfile);
++}
++
+ static void _exit_handler() {
+ 	clean_quit(-1);
+ }
+@@ -1158,6 +1214,12 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
+ 				Global::resized = true;
+ 			}
+ 
++			//? Open process list in external editor
++			if (Proc::open_in_editor) {
++				Proc::open_in_editor = false;
++				open_proclist_in_editor();
++			}
++
+ 			//? Make sure terminal size hasn't changed (in case of SIGWINCH not working properly)
+ 			term_resize(Global::resized);
+ 
+diff --git a/src/btop_draw.cpp b/src/btop_draw.cpp
+index 0388751..44849b5 100644
+--- a/src/btop_draw.cpp
++++ b/src/btop_draw.cpp
+@@ -1566,6 +1566,77 @@ namespace Proc {
+ 
+ 	string box;
+ 
++	string export_list(const vector<proc_info>& plist) {
++		string out;
++		auto proc_tree = Config::getB("proc_tree");
++		auto mem_bytes = Config::getB("proc_mem_bytes");
++		auto totalMem = Mem::get_totalMem();
++
++		// First pass: find max widths
++		size_t max_name = 4;  // "Name" header
++		size_t max_tree = 4;  // "Tree" header
++		size_t max_user = 4;  // "User" header
++		for (const auto& p : plist) {
++			if (p.filtered) continue;
++			if (proc_tree and p.tree_index == plist.size()) continue;
++			max_name = std::max(max_name, p.name.size());
++			max_user = std::max(max_user, p.user.size());
++			if (proc_tree) {
++				string tree_str = p.prefix + to_string(p.pid) + " " + p.name;
++				max_tree = std::max(max_tree, tree_str.size());
++			}
++		}
++
++		// Header line
++		size_t total_width;
++		if (not proc_tree) {
++			out += fmt::format("{:>8} {:{}} {:{}} {:>5} {:>5} {:>5}\n",
++				"PID", "Name", max_name, "User", max_user,
++				mem_bytes ? "MemB" : "Mem%", "Cpu%", "Thr");
++			total_width = 8 + 1 + max_name + 1 + max_user + 1 + 5 + 1 + 5 + 1 + 5;
++		} else {
++			out += fmt::format("{:{}} {:{}} {:>5} {:>5} {:>5}\n",
++				"Tree", max_tree, "User", max_user,
++				mem_bytes ? "MemB" : "Mem%", "Cpu%", "Thr");
++			total_width = max_tree + 1 + max_user + 1 + 5 + 1 + 5 + 1 + 5;
++		}
++		out += string(total_width, '-') + "\n";
++
++		// Process lines
++		for (const auto& p : plist) {
++			if (p.filtered) continue;
++			if (proc_tree and p.tree_index == plist.size()) continue;
++
++			string mem_str;
++			if (mem_bytes) {
++				mem_str = floating_humanizer(p.mem, false, 0, 0, true);
++			} else {
++				mem_str = fmt::format("{:.1f}", (double)p.mem * 100.0 / totalMem);
++			}
++
++			string cpu_str = fmt::format("{:.1f}", p.cpu_p);
++
++			if (not proc_tree) {
++				out += fmt::format("{:>8} {:{}} {:{}} {:>5} {:>5} {:>5}\n",
++					p.pid,
++					p.name, max_name,
++					p.user, max_user,
++					mem_str,
++					cpu_str,
++					p.threads);
++			} else {
++				string tree_str = p.prefix + to_string(p.pid) + " " + p.name;
++				out += fmt::format("{:{}} {:{}} {:>5} {:>5} {:>5}\n",
++					tree_str, max_tree,
++					p.user, max_user,
++					mem_str,
++					cpu_str,
++					p.threads);
++			}
++		}
++		return out;
++	}
++
+ 	int selection(const std::string_view cmd_key) {
+ 		auto start = Config::getI("proc_start");
+ 		auto selected = Config::getI("proc_selected");
+diff --git a/src/btop_input.cpp b/src/btop_input.cpp
+index ffd4e02..3689afd 100644
+--- a/src/btop_input.cpp
++++ b/src/btop_input.cpp
+@@ -487,6 +487,12 @@ namespace Input {
+ 						no_update = false;
+ 					}
+ 				}
++				else if (is_in(key, "{", "}", "[", "]", "<", ">") and Config::getB("proc_tree")) {
++					atomic_wait(Runner::active);
++					if (is_in(key, "{", "[", "<")) Proc::collapse_all = true;
++					if (is_in(key, "}", "]", ">")) Proc::expand_all = true;
++					no_update = false;
++				}
+ 				else if (is_in(key, "t", kill_key) and (Config::getB("show_detailed") or Config::getI("selected_pid") > 0)) {
+ 					atomic_wait(Runner::active);
+ 					if (Config::getB("show_detailed") and Config::getI("proc_selected") == 0 and Proc::detailed.status == "Dead") return;
+@@ -505,6 +511,11 @@ namespace Input {
+ 				    Menu::show(Menu::Menus::Renice);
+ 				    return;
+ 			    }
++				else if (is_in(key, "v", "V")) {
++					atomic_wait(Runner::active);
++					Proc::open_in_editor = true;
++					return;
++				}
+ 				else if (is_in(key, "up", "down", "page_up", "page_down", "home", "end") or (vim_keys and is_in(key, "j", "k", "g", "G"))) {
+ 					proc_mouse_scroll:
+ 					redraw = false;
+diff --git a/src/btop_shared.hpp b/src/btop_shared.hpp
+index a2d0bdc..18b2f05 100644
+--- a/src/btop_shared.hpp
++++ b/src/btop_shared.hpp
+@@ -345,6 +345,7 @@ namespace Net {
+ 
+ namespace Proc {
+ 	extern atomic<int> numpids;
++	extern atomic<bool> open_in_editor;
+ 
+ 	extern string box;
+ 	extern int x, y, width, height, min_width, min_height;
+@@ -352,6 +353,7 @@ namespace Proc {
+ 	extern int select_max;
+ 	extern atomic<int> detailed_pid;
+ 	extern int selected_pid, start, selected, collapse, expand, filter_found, selected_depth, toggle_children;
++	extern bool collapse_all, expand_all;
+ 	extern int scroll_pos;
+ 	extern string selected_name;
+ 	extern atomic<bool> resized;
+@@ -455,6 +457,9 @@ namespace Proc {
+ 
+ 	//* Build prefixes for tree view
+ 	void _collect_prefixes(tree_proc& t, bool is_last, const string &header = "");
++
++	//* Export process list as formatted text for external viewing
++	string export_list(const vector<proc_info>& plist);
+ }
+ 
+ /// Detect container engine.
+diff --git a/src/freebsd/btop_collect.cpp b/src/freebsd/btop_collect.cpp
+index 17f916f..517a548 100644
+--- a/src/freebsd/btop_collect.cpp
++++ b/src/freebsd/btop_collect.cpp
+@@ -1003,11 +1003,13 @@ namespace Proc {
+ 	string current_filter;
+ 	bool current_rev = false;
+ 	bool is_tree_mode;
++	atomic<bool> open_in_editor{false};
+ 
+ 	fs::file_time_type passwd_time;
+ 
+ 	uint64_t cputimes;
+ 	int collapse = -1, expand = -1, toggle_children = -1;
++	bool collapse_all = false, expand_all = false;
+ 	uint64_t old_cputimes = 0;
+ 	atomic<int> numpids = 0;
+ 	int filter_found = 0;
+@@ -1269,6 +1271,14 @@ namespace Proc {
+ 		if (tree and (not no_update or should_filter or sorted_change)) {
+ 			bool locate_selection = false;
+ 
++			if (collapse_all or expand_all) {
++				for (auto& p : current_procs) {
++					p.collapsed = collapse_all;
++				}
++				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
++				collapse_all = expand_all = false;
++			}
++
+ 			if (toggle_children != -1) {
+ 				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);
+ 				if (collapser != current_procs.end()){
+diff --git a/src/linux/btop_collect.cpp b/src/linux/btop_collect.cpp
+index 3db1536..1fa5f65 100644
+--- a/src/linux/btop_collect.cpp
++++ b/src/linux/btop_collect.cpp
+@@ -2791,11 +2791,13 @@ namespace Proc {
+ 	string current_filter;
+ 	bool current_rev{};
+ 	bool is_tree_mode;
++	atomic<bool> open_in_editor{false};
+ 
+ 	fs::file_time_type passwd_time;
+ 
+ 	uint64_t cputimes;
+ 	int collapse = -1, expand = -1, toggle_children = -1;
++	bool collapse_all = false, expand_all = false;
+ 	uint64_t old_cputimes{};
+ 	atomic<int> numpids{};
+ 	int filter_found{};
+@@ -3237,6 +3239,14 @@ namespace Proc {
+ 		if (tree and (not no_update or should_filter or sorted_change)) {
+ 			bool locate_selection = false;
+ 
++			if (collapse_all or expand_all) {
++				for (auto& p : current_procs) {
++					p.collapsed = collapse_all;
++				}
++				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
++				collapse_all = expand_all = false;
++			}
++
+ 			if (toggle_children != -1) {
+ 				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);
+ 				if (collapser != current_procs.end()){
+diff --git a/src/netbsd/btop_collect.cpp b/src/netbsd/btop_collect.cpp
+index 9f56899..ecbd719 100644
+--- a/src/netbsd/btop_collect.cpp
++++ b/src/netbsd/btop_collect.cpp
+@@ -1096,11 +1096,13 @@ namespace Proc {
+ 	string current_filter;
+ 	bool current_rev = false;
+ 	bool is_tree_mode;
++	atomic<bool> open_in_editor{false};
+ 
+ 	fs::file_time_type passwd_time;
+ 
+ 	uint64_t cputimes;
+ 	int collapse = -1, expand = -1, toggle_children = -1;
++	bool collapse_all = false, expand_all = false;
+ 	uint64_t old_cputimes = 0;
+ 	atomic<int> numpids = 0;
+ 	int filter_found = 0;
+@@ -1346,6 +1348,15 @@ namespace Proc {
+ 		//* Generate tree view if enabled
+ 		if (tree and (not no_update or should_filter or sorted_change)) {
+ 			bool locate_selection = false;
++
++			if (collapse_all or expand_all) {
++				for (auto& p : current_procs) {
++					p.collapsed = collapse_all;
++				}
++				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
++				collapse_all = expand_all = false;
++			}
++
+ 			if (auto find_pid = (collapse != -1 ? collapse : expand); find_pid != -1) {
+ 				auto collapser = rng::find(current_procs, find_pid, &proc_info::pid);
+ 				if (collapser != current_procs.end()) {
+diff --git a/src/openbsd/btop_collect.cpp b/src/openbsd/btop_collect.cpp
+index faf3b2f..901fbc3 100644
+--- a/src/openbsd/btop_collect.cpp
++++ b/src/openbsd/btop_collect.cpp
+@@ -961,11 +961,13 @@ namespace Proc {
+ 	string current_filter;
+ 	bool current_rev = false;
+ 	bool is_tree_mode;
++	atomic<bool> open_in_editor{false};
+ 
+ 	fs::file_time_type passwd_time;
+ 
+ 	uint64_t cputimes;
+ 	int collapse = -1, expand = -1, toggle_children = -1;
++	bool collapse_all = false, expand_all = false;
+ 	uint64_t old_cputimes = 0;
+ 	atomic<int> numpids = 0;
+ 	int filter_found = 0;
+@@ -1207,6 +1209,14 @@ namespace Proc {
+ 		if (tree and (not no_update or should_filter or sorted_change)) {
+ 			bool locate_selection = false;
+ 
++			if (collapse_all or expand_all) {
++				for (auto& p : current_procs) {
++					p.collapsed = collapse_all;
++				}
++				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
++				collapse_all = expand_all = false;
++			}
++
+ 			if (toggle_children != -1) {
+ 				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);
+ 				if (collapser != current_procs.end()){
+diff --git a/src/osx/btop_collect.cpp b/src/osx/btop_collect.cpp
+index 197cec5..983b12c 100644
+--- a/src/osx/btop_collect.cpp
++++ b/src/osx/btop_collect.cpp
+@@ -1045,11 +1045,13 @@ namespace Proc {
+ 	string current_filter;
+ 	bool current_rev = false;
+ 	bool is_tree_mode;
++	atomic<bool> open_in_editor{false};
+ 
+ 	fs::file_time_type passwd_time;
+ 
+ 	uint64_t cputimes;
+ 	int collapse = -1, expand = -1, toggle_children = -1;
++	bool collapse_all = false, expand_all = false;
+ 	uint64_t old_cputimes = 0;
+ 	atomic<int> numpids = 0;
+ 	int filter_found = 0;
+@@ -1349,6 +1351,14 @@ namespace Proc {
+ 		if (tree and (not no_update or should_filter or sorted_change)) {
+ 			bool locate_selection = false;
+ 
++			if (collapse_all or expand_all) {
++				for (auto& p : current_procs) {
++					p.collapsed = collapse_all;
++				}
++				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
++				collapse_all = expand_all = false;
++			}
++
+ 			if (toggle_children != -1) {
+ 				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);
+ 				if (collapser != current_procs.end()){

@@ -1566,6 +1566,77 @@ namespace Proc {
 
 	string box;
 
+	string export_list(const vector<proc_info>& plist) {
+		string out;
+		auto proc_tree = Config::getB("proc_tree");
+		auto mem_bytes = Config::getB("proc_mem_bytes");
+		auto totalMem = Mem::get_totalMem();
+
+		// First pass: find max widths
+		size_t max_name = 4;  // "Name" header
+		size_t max_tree = 4;  // "Tree" header
+		size_t max_user = 4;  // "User" header
+		for (const auto& p : plist) {
+			if (p.filtered) continue;
+			if (proc_tree and p.tree_index == plist.size()) continue;
+			max_name = std::max(max_name, p.name.size());
+			max_user = std::max(max_user, p.user.size());
+			if (proc_tree) {
+				string tree_str = p.prefix + to_string(p.pid) + " " + p.name;
+				max_tree = std::max(max_tree, tree_str.size());
+			}
+		}
+
+		// Header line
+		size_t total_width;
+		if (not proc_tree) {
+			out += fmt::format("{:>8} {:{}} {:{}} {:>5} {:>5} {:>5}\n",
+				"PID", "Name", max_name, "User", max_user,
+				mem_bytes ? "MemB" : "Mem%", "Cpu%", "Thr");
+			total_width = 8 + 1 + max_name + 1 + max_user + 1 + 5 + 1 + 5 + 1 + 5;
+		} else {
+			out += fmt::format("{:{}} {:{}} {:>5} {:>5} {:>5}\n",
+				"Tree", max_tree, "User", max_user,
+				mem_bytes ? "MemB" : "Mem%", "Cpu%", "Thr");
+			total_width = max_tree + 1 + max_user + 1 + 5 + 1 + 5 + 1 + 5;
+		}
+		out += string(total_width, '-') + "\n";
+
+		// Process lines
+		for (const auto& p : plist) {
+			if (p.filtered) continue;
+			if (proc_tree and p.tree_index == plist.size()) continue;
+
+			string mem_str;
+			if (mem_bytes) {
+				mem_str = floating_humanizer(p.mem, false, 0, 0, true);
+			} else {
+				mem_str = fmt::format("{:.1f}", (double)p.mem * 100.0 / totalMem);
+			}
+
+			string cpu_str = fmt::format("{:.1f}", p.cpu_p);
+
+			if (not proc_tree) {
+				out += fmt::format("{:>8} {:{}} {:{}} {:>5} {:>5} {:>5}\n",
+					p.pid,
+					p.name, max_name,
+					p.user, max_user,
+					mem_str,
+					cpu_str,
+					p.threads);
+			} else {
+				string tree_str = p.prefix + to_string(p.pid) + " " + p.name;
+				out += fmt::format("{:{}} {:{}} {:>5} {:>5} {:>5}\n",
+					tree_str, max_tree,
+					p.user, max_user,
+					mem_str,
+					cpu_str,
+					p.threads);
+			}
+		}
+		return out;
+	}
+
 	int selection(const std::string_view cmd_key) {
 		auto start = Config::getI("proc_start");
 		auto selected = Config::getI("proc_selected");
