@@ -22,6 +22,81 @@
 [![Continuous Build NetBSD](https://github.com/aristocratos/btop/actions/workflows/continuous-build-netbsd.yml/badge.svg)](https://github.com/aristocratos/btop/actions/workflows/continuous-build-netbsd.yml)
 [![Continuous Build OpenBSD](https://github.com/aristocratos/btop/actions/workflows/continuous-build-openbsd.yml/badge.svg)](https://github.com/aristocratos/btop/actions/workflows/continuous-build-openbsd.yml)
 
+---
+
+## Fork
+
+This is a fork of [btop++](https://github.com/aristocratos/btop) with additional features. Heavy AI help to speed through this.
+
+### Added Features
+
+#### Collapse/Expand All in Tree View (`{}/[]/</>`  keys)
+
+In process tree view mode, collapse or expand all processes:
+- **Collapse all:** `{`, `[`, or `<`
+- **Expand all:** `}`, `]`, or `>`
+
+Original btop can only collapse individual process. This adds full tree collapse/expand with multiple key options.
+
+#### Open Process List in Editor (`v/V` key)
+
+Press `v` or `V` in the process view to export the full filtered/sorted process list to your `$EDITOR`.
+
+- Exports **all** processes matching the current filter/sort (not just the visible viewport)
+- Similar to Zellij's "open scrollback in editor" feature
+
+### NixOS Installation
+
+**Fork as source** is better for stability as nixpkgs updates won't break your build.
+
+#### Method 1: Use Fork as Source (Recommended)
+
+Override the package source to use this fork directly:
+
+```nix
+nixpkgs.overlays = [
+  (final: prev: {
+    btop = prev.btop.overrideAttrs (old: {
+      src = final.fetchFromGitHub {
+        owner = "Zach-Mac";
+        repo = "btop";
+        rev = "cf2d2dcd52eb92fdb4323023bed6d1a4fbbcc0ad";
+        hash = "sha256-AAAA"; # nix build will error with correct hash
+      };
+    });
+
+    # For CUDA/GPU support, use btop-cuda instead:
+    # btop-cuda = prev.btop-cuda.overrideAttrs (old: { ... });
+  })
+];
+```
+
+To get latest rev:
+
+```bash
+git -C ~/Dev/btop rev-parse HEAD
+```
+
+
+#### Method 2: Apply Patch
+
+Apply the included `patch.patch` file to the upstream package:
+
+```nix
+nixpkgs.overlays = [
+  (final: prev: {
+    btop = prev.btop.overrideAttrs (old: {
+      patches = (old.patches or []) ++ [
+        ./path/to/patch.patch
+      ];
+    });
+  })
+];
+```
+
+
+---
+
 ## Index
 
 * [News](#news)
