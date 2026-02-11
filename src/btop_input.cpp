@@ -486,6 +486,7 @@ namespace Input {
 						if (key == "C")	Proc::toggle_children = pid;
 						no_update = false;
 					}
+					else keep_going = true;
 				}
 				else if (is_in(key, "{", "}", "[", "]", "<", ">") and Config::getB("proc_tree")) {
 					atomic_wait(Runner::active);
